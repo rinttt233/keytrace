@@ -214,7 +214,7 @@ namespace Keytrace
                 StringAlignment.Far);
             AddHit(g, new RectangleF(lc.Right - Ui.F(100), lc.Y + Ui.F(8), Ui.F(90), Ui.F(30)), "nav:1");
             float kh = DrawKeyboard(g, new RectangleF(lc.X + Ui.F(20), lc.Y + Ui.F(58),
-                lc.Width - Ui.F(40), Ui.F(200)), true, false);
+                lc.Width - Ui.F(40), Ui.F(200)), true, false, false);
             DrawLegend(g, new RectangleF(lc.X + Ui.F(20), lc.Y + Ui.F(66) + kh, lc.Width - Ui.F(40), Ui.F(16)),
                 metric == Metric.Count ? MaxKey(Metric.Count) : MaxKey(Metric.Hold));
 
@@ -253,6 +253,66 @@ namespace Keytrace
                 if (v > max) max = v;
             }
             return max;
+        }
+
+        private static double HeatValue(KeyStat k, HeatMetric m)
+        {
+            if (k == null) return 0;
+            if (m == HeatMetric.Count) return k.Count;
+            if (m == HeatMetric.Hold) return k.HoldMs;
+            return k.Count > 0 ? k.HoldMs / k.Count : 0;
+        }
+
+        private double HeatMax(HeatMetric m)
+        {
+            double max = 0;
+            if (snap == null) return max;
+            foreach (KeyStat k in snap.Keys)
+            {
+                double v = HeatValue(k, m);
+                if (v > max) max = v;
+            }
+            return max;
+        }
+
+        private static string HeatName(HeatMetric m)
+        {
+            if (m == HeatMetric.Count) return "次数";
+            if (m == HeatMetric.Hold) return "按住时长";
+            return "平均按住";
+        }
+
+        private static string HeatMaxText(HeatMetric m, double v)
+        {
+            return m == HeatMetric.Count ? Ui.FmtInt((long)v) : Ui.FmtDurShort(v);
+        }
+
+        // 蓝色表示第一个指标高，红色表示第二个指标高，两个都高混成紫色。
+        private static Color MixHeat(double tb, double tr)
+        {
+            double wB = tb * (1 - tr);
+            double wR = tr * (1 - tb);
+            double wP = Math.Min(tb, tr);
+            double sum = wB + wR + wP;
+            if (sum <= 0.0001) return HeatC[0];
+            Color bg = HeatC[0];
+            Color blue = Color.FromArgb(59, 130, 246);
+            Color red = Color.FromArgb(225, 62, 62);
+            Color purple = Color.FromArgb(139, 92, 246);
+            double a = Math.Min(1.0, sum);
+            double r = (wB * blue.R + wR * red.R + wP * purple.R) / sum;
+            double gg = (wB * blue.G + wR * red.G + wP * purple.G) / sum;
+            double b = (wB * blue.B + wR * red.B + wP * purple.B) / sum;
+            return Color.FromArgb(
+                (int)Math.Round(bg.R * (1 - a) + r * a),
+                (int)Math.Round(bg.G * (1 - a) + gg * a),
+                (int)Math.Round(bg.B * (1 - a) + b * a));
+        }
+
+        private static bool Dark(Color c)
+        {
+            double l = (c.R * 0.299 + c.G * 0.587 + c.B * 0.114) / 255.0;
+            return l < 0.66;
         }
 
         private void DrawTopList(Graphics g, RectangleF r)
@@ -318,6 +378,54 @@ namespace Keytrace
 
         // ---------------------------------------------------------- 热力图
 
+        private void DrawMixChips(Graphics g, RectangleF card, float pad)
+        {
+            float w = Ui.F(144), h = Ui.F(32), gap = Ui.F(8);
+            float x = card.Right - pad - w;
+            mixRedRect = new RectangleF(x, card.Y + Ui.F(10), w, h);
+            mixBlueRect = new RectangleF(x - gap - w, card.Y + Ui.F(10), w, h);
+            DrawMixChip(g, mixBlueRect, Color.FromArgb(59, 130, 246), "蓝", HeatName(mixBlue), mixMenu == 1);
+            DrawMixChip(g, mixRedRect, Color.FromArgb(225, 62, 62), "红", HeatName(mixRed), mixMenu == 2);
+            AddHit(mixBlueRect, "mixb");
+            AddHit(mixRedRect, "mixr");
+        }
+
+        private void DrawMixChip(Graphics g, RectangleF r, Color dot, string tag, string val, bool open)
+        {
+            Ui.FillRound(g, r, Ui.F(8), open ? Color.White : Color.FromArgb(244, 245, 248));
+            Ui.StrokeRound(g, r, Ui.F(8), open ? Ui.Accent : Ui.Line, 1);
+            using (SolidBrush b = new SolidBrush(dot))
+                g.FillEllipse(b, r.X + Ui.F(11), r.Y + r.Height / 2 - Ui.F(4), Ui.F(8), Ui.F(8));
+            Ui.DrawText(g, tag + " · " + val, Ui.F11, Ui.Text,
+                new RectangleF(r.X + Ui.F(24), r.Y, r.Width - Ui.F(46), r.Height));
+            using (Pen p = new Pen(Ui.Text3, Ui.F(1.4f)))
+            {
+                p.StartCap = LineCap.Round;
+                p.EndCap = LineCap.Round;
+                float cx = r.Right - Ui.F(13), cy = r.Y + r.Height / 2;
+                g.DrawLine(p, cx - Ui.F(3), cy - Ui.F(2), cx, cy + Ui.F(1));
+                g.DrawLine(p, cx, cy + Ui.F(1), cx + Ui.F(3), cy - Ui.F(2));
+            }
+        }
+
+        private void DrawMixLegend(Graphics g, RectangleF r)
+        {
+            float x = r.X, y = r.Y + Ui.F(8);
+            x = DrawSwatch(g, x, y, Color.FromArgb(59, 130, 246), "蓝 " + HeatName(mixBlue), Ui.F(104));
+            x = DrawSwatch(g, x, y, Color.FromArgb(225, 62, 62), "红 " + HeatName(mixRed), Ui.F(104));
+            DrawSwatch(g, x, y, Color.FromArgb(139, 92, 246), "都高", Ui.F(60));
+            Ui.DrawText(g, "蓝/红各自按最大值归一", Ui.FontPx(10.5f, false), Ui.Text3,
+                new RectangleF(r.Right - Ui.F(150), r.Y, Ui.F(150), Ui.F(16)), StringAlignment.Far);
+        }
+
+        private float DrawSwatch(Graphics g, float x, float y, Color c, string label, float slot)
+        {
+            Ui.FillRound(g, new RectangleF(x, y - Ui.F(4), Ui.F(9), Ui.F(9)), Ui.F(2), c);
+            Ui.DrawText(g, label, Ui.FontPx(10.5f, false), Ui.Text2,
+                new RectangleF(x + Ui.F(14), y - Ui.F(9), slot - Ui.F(14), Ui.F(16)));
+            return x + slot;
+        }
+
         private void DrawHeatmap(Graphics g)
         {
             float left = ContentX, top = ContentY, w = ContentW;
@@ -329,15 +437,21 @@ namespace Keytrace
             Ui.Card(g, card, true);
             Ui.DrawText(g, "键盘热力图", Ui.F14B, Ui.Text,
                 new RectangleF(card.X + pad, card.Y + Ui.F(14), Ui.F(200), Ui.F(20)));
+            if (heatMix) DrawMixChips(g, card, pad);
             string sub = (snap != null ? Ui.FmtInt(snap.TotalCount) + " 次 · " + Ui.FmtDur(snap.TotalHoldMs) : "")
                 + " · " + RangeSub();
+            float subW = card.Width - pad * 2 - (heatMix ? Ui.F(324) : 0);
             Ui.DrawText(g, sub, Ui.F11, Ui.Text2,
-                new RectangleF(card.X + pad, card.Y + Ui.F(34), card.Width - pad * 2, Ui.F(18)));
+                new RectangleF(card.X + pad, card.Y + Ui.F(34), Math.Max(Ui.F(160), subW), Ui.F(18)));
             float kh = DrawKeyboard(g, new RectangleF(card.X + pad, card.Y + Ui.F(52),
-                w - pad * 2, kbH), false, true);
-            DrawLegend(g, new RectangleF(card.X + pad, card.Y + Ui.F(58) + kh,
-                card.Width - pad * 2, Ui.F(16)),
-                metric == Metric.Count ? MaxKey(Metric.Count) : MaxKey(Metric.Hold));
+                w - pad * 2, kbH), false, true, heatMix);
+            if (heatMix)
+                DrawMixLegend(g, new RectangleF(card.X + pad, card.Y + Ui.F(58) + kh,
+                    card.Width - pad * 2, Ui.F(16)));
+            else
+                DrawLegend(g, new RectangleF(card.X + pad, card.Y + Ui.F(58) + kh,
+                    card.Width - pad * 2, Ui.F(16)),
+                    metric == Metric.Count ? MaxKey(Metric.Count) : MaxKey(Metric.Hold));
 
             float y = top + cardH + Gap;
             List<KeyStat> keys = SortedKeys();
@@ -570,7 +684,7 @@ namespace Keytrace
                 Ui.F11, Ui.Text2,
                 new RectangleF(c3.X + pad, c3.Y + Ui.F(44), c3.Width - pad * 2, Ui.F(40)),
                 StringAlignment.Near, StringAlignment.Near, true);
-            Ui.DrawText(g, "版本 1.0.0 · 原生 WinForms · 已运行 " + UptimeText(), Ui.F10, Ui.Text3,
+            Ui.DrawText(g, "版本 1.1.0 · 原生 WinForms · 已运行 " + UptimeText(), Ui.F10, Ui.Text3,
                 new RectangleF(c3.X + pad, c3.Y + Ui.F(96), c3.Width - pad * 2, Ui.F(18)));
             DrawButton(g, new RectangleF(c3.X + pad, c3.Y + Ui.F(122), Ui.F(118), Ui.F(34)),
                 "退出记录器", false, "quit");
@@ -832,12 +946,14 @@ namespace Keytrace
 
         // ---------------------------------------------------------- 键盘
 
-        private float DrawKeyboard(Graphics g, RectangleF area, bool mini, bool showValues)
+        private float DrawKeyboard(Graphics g, RectangleF area, bool mini, bool showValues, bool mix)
         {
             float u = Math.Min(mini ? Ui.F(28) : Ui.F(48), area.Width / 23.3f);
             if (u <= 0) return 0;
             Dictionary<int, KeyStat> byVk = ByVk();
             double max = metric == Metric.Count ? MaxKey(Metric.Count) : MaxKey(Metric.Hold);
+            double maxBlue = HeatMax(mixBlue);
+            double maxRed = HeatMax(mixRed);
             float h = u * 6;
             using (Pen border = new Pen(Color.FromArgb(236, 238, 242), 1))
             {
@@ -850,13 +966,22 @@ namespace Keytrace
                     byVk.TryGetValue(k.Vk, out st);
                     double raw = st == null ? 0 : (metric == Metric.Count ? st.Count : st.HoldMs);
                     double t = max > 0 ? Math.Pow(raw / max, 0.55) : 0;
-                    Color bg = Heat(t);
-                    Color fg = t > 0.58 ? Color.White : (t > 0.28 ? Color.FromArgb(30, 58, 138) : Color.FromArgb(100, 116, 139));
+                    double tb = 0, tr = 0;
+                    if (mix)
+                    {
+                        double vb = HeatValue(st, mixBlue), vr = HeatValue(st, mixRed);
+                        tb = maxBlue > 0 ? Math.Pow(vb / maxBlue, 0.55) : 0;
+                        tr = maxRed > 0 ? Math.Pow(vr / maxRed, 0.55) : 0;
+                    }
+                    Color bg = mix ? MixHeat(tb, tr) : Heat(t);
+                    Color fg;
+                    if (mix) fg = Dark(bg) ? Color.White : Color.FromArgb(71, 85, 105);
+                    else fg = t > 0.58 ? Color.White : (t > 0.28 ? Color.FromArgb(30, 58, 138) : Color.FromArgb(100, 116, 139));
                     Ui.FillRound(g, r, Ui.F(5), bg);
                     using (GraphicsPath path = Ui.RoundPath(r, Ui.F(5)))
                         g.DrawPath(border, path);
-                    string label = mini ? ShortLabel(k.Label) : k.Label;
-                    if (!mini && showValues && raw > 0)
+                    string label = (mini || u < Ui.F(32)) ? ShortLabel(k.Label) : k.Label;
+                    if (!mix && !mini && showValues && raw > 0)
                     {
                         Ui.DrawText(g, label, Ui.FontPx(9.5f, false), fg,
                             new RectangleF(r.X + Ui.F(2), r.Y + r.Height * 0.18f, r.Width - Ui.F(4), r.Height * 0.42f),
@@ -868,7 +993,7 @@ namespace Keytrace
                     }
                     else
                     {
-                        Ui.DrawText(g, label, Ui.FontPx(mini ? 6.5f : 10f, false), fg,
+                        Ui.DrawText(g, label, Ui.FontPx(mini ? 6.5f : (mix ? 9.5f : 10f), false), fg,
                             new RectangleF(r.X + Ui.F(2), r.Y, r.Width - Ui.F(4), r.Height),
                             StringAlignment.Center, StringAlignment.Center);
                     }

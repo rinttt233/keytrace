@@ -30,6 +30,7 @@ namespace Keytrace
         private enum View { Overview, Heatmap, Trends, Settings }
         private enum RangeMode { Today, H24, D7, D30, All, Custom }
         private enum Metric { Count, Hold }
+        private enum HeatMetric { Count, Hold, Avg }
 
         private class Hit
         {
@@ -79,8 +80,14 @@ namespace Keytrace
         private bool sortDesc = true;
         private bool groupMenu;
         private bool hoverChip;
-        private int groupMenuHover = -1;
+        private int menuHover = -1;
         private RectangleF groupChipRect;
+        private bool heatMix;
+        private HeatMetric mixBlue = HeatMetric.Count;
+        private HeatMetric mixRed = HeatMetric.Hold;
+        private int mixMenu;
+        private RectangleF mixBlueRect;
+        private RectangleF mixRedRect;
 
         private static readonly float[] HeatX = { 0f, 0.28f, 0.55f, 0.78f, 1f };
         private static readonly Color[] HeatC =
@@ -121,13 +128,14 @@ namespace Keytrace
             {
                 if (e.KeyCode == Keys.Escape)
                 {
-                    if (groupMenu) { groupMenu = false; Refresh(); }
+                    if (groupMenu || mixMenu != 0) { groupMenu = false; mixMenu = 0; Refresh(); }
                     else { view = View.Overview; Refresh(); }
                 }
                 if (e.Control && e.KeyCode == Keys.G)
                 {
                     groupMenu = !groupMenu;
-                    groupMenuHover = -1;
+                    mixMenu = 0;
+                    menuHover = -1;
                     hoverIndex = -1;
                     hoverVk = 0;
                     Refresh();
@@ -161,9 +169,10 @@ namespace Keytrace
 
             Deactivate += delegate
             {
-                if (!groupMenu) return;
+                if (!groupMenu && mixMenu == 0) return;
                 groupMenu = false;
-                groupMenuHover = -1;
+                mixMenu = 0;
+                menuHover = -1;
                 Refresh();
             };
 
@@ -185,6 +194,9 @@ namespace Keytrace
         {
             if (index < 0 || index > 3) return;
             view = (View)index;
+            groupMenu = false;
+            mixMenu = 0;
+            menuHover = -1;
             scroll = 0;
             ClampScroll();
             Refresh();
@@ -466,10 +478,10 @@ namespace Keytrace
             mousePos = e.Location;
             PointF sp = new PointF(e.X, e.Y);
 
-            if (groupMenu)
+            if (groupMenu || mixMenu != 0)
             {
                 int mi = MenuIndex(sp);
-                if (mi != groupMenuHover) { groupMenuHover = mi; Refresh(); }
+                if (mi != menuHover) { menuHover = mi; Refresh(); }
                 Cursor = mi >= 0 ? Cursors.Hand : Cursors.Default;
                 return;
             }
@@ -503,17 +515,24 @@ namespace Keytrace
             if (e.Button != MouseButtons.Left) return;
             PointF sp = new PointF(e.X, e.Y);
 
-            if (groupMenu)
+            if (groupMenu || mixMenu != 0)
             {
                 int mi = MenuIndex(sp);
                 groupMenu = false;
-                groupMenuHover = -1;
+                mixMenu = 0;
+                menuHover = -1;
                 if (mi >= 0)
                 {
                     string ma = menuHits[mi].Action;
                     if (ma.StartsWith("gswitch:")) SwitchGroup(int.Parse(ma.Substring(8)));
                     else if (ma == "gnew") { Refresh(); NewGroup(); return; }
                     else if (ma == "gmanage") { view = View.Settings; scroll = 0; ClampScroll(); }
+                    else if (ma.StartsWith("mixset:"))
+                    {
+                        string[] p = ma.Split(':');
+                        HeatMetric m = (HeatMetric)int.Parse(p[2]);
+                        if (p[1] == "1") mixBlue = m; else mixRed = m;
+                    }
                 }
                 Refresh();
                 return;
@@ -522,7 +541,8 @@ namespace Keytrace
             if (groupChipRect.Contains(sp))
             {
                 groupMenu = true;
-                groupMenuHover = -1;
+                mixMenu = 0;
+                menuHover = -1;
                 hoverIndex = -1;
                 hoverVk = 0;
                 Refresh();
@@ -534,7 +554,7 @@ namespace Keytrace
             if (idx < 0) return;
             Hit h = hits[idx];
             string a = h.Action;
-            if (a.StartsWith("nav:")) { view = (View)int.Parse(a.Substring(4)); scroll = 0; ClampScroll(); Refresh(); }
+            if (a.StartsWith("nav:")) { groupMenu = false; mixMenu = 0; view = (View)int.Parse(a.Substring(4)); scroll = 0; ClampScroll(); Refresh(); }
             else if (a.StartsWith("range:"))
             {
                 int r = int.Parse(a.Substring(6));
@@ -554,7 +574,16 @@ namespace Keytrace
                 }
                 else { range = (RangeMode)r; scroll = 0; RefreshData(); }
             }
-            else if (a.StartsWith("metric:")) { metric = (Metric)int.Parse(a.Substring(7)); scroll = 0; RefreshData(); }
+            else if (a.StartsWith("metric:"))
+            {
+                mixMenu = 0;
+                int mi = int.Parse(a.Substring(7));
+                if (mi == 2) heatMix = true;
+                else { heatMix = false; metric = (Metric)mi; }
+                Refresh();
+            }
+            else if (a == "mixb") { mixMenu = mixMenu == 1 ? 0 : 1; menuHover = -1; Refresh(); }
+            else if (a == "mixr") { mixMenu = mixMenu == 2 ? 0 : 2; menuHover = -1; Refresh(); }
             else if (a == "refresh") { RefreshData(); RefreshStatus(); }
             else if (a == "sort")
             {
@@ -777,6 +806,7 @@ namespace Keytrace
             DrawScrollbar(g);
             DrawTooltip(g);
             DrawGroupMenu(g);
+            DrawMixMenu(g);
         }
 
         private void DrawSidebar(Graphics g)
@@ -926,8 +956,10 @@ namespace Keytrace
             string[] subs = { "键盘使用情况一览", "颜色越深，使用越多", "按小时统计的变化", "启动、数据与隐私" };
             Ui.DrawText(g, titles[(int)view], Ui.F15B, Ui.Text,
                 new RectangleF(x + Ui.F(30), Ui.F(16), Ui.F(260), Ui.F(22)));
-            Ui.DrawText(g, view == View.Settings ? subs[3] : RangeSub(), Ui.F11, Ui.Text3,
-                new RectangleF(x + Ui.F(30), Ui.F(40), Ui.F(560), Ui.F(18)));
+            float subW = view == View.Settings ? Ui.F(560) : ClientSize.Width - x - Ui.F(630);
+            if (subW >= Ui.F(120))
+                Ui.DrawText(g, view == View.Settings ? subs[3] : RangeSub(), Ui.F11, Ui.Text3,
+                    new RectangleF(x + Ui.F(30), Ui.F(40), subW, Ui.F(18)));
 
             if (view != View.Settings)
             {
@@ -945,16 +977,21 @@ namespace Keytrace
                 AddHit(rb, "refresh");
                 rx = rb.X - Ui.F(10);
 
-                string[] mt = { "次数", "按住时长" };
-                float mw = Ui.F(118);
+                bool heatTabs = view == View.Heatmap;
+                string[] mt = heatTabs ? new string[] { "次数", "时长", "综合" }
+                                       : new string[] { "次数", "按住时长" };
+                float mw = Ui.F(heatTabs ? 174 : 118);
                 RectangleF mr = new RectangleF(rx - mw, Ui.F(19), mw, Ui.F(32));
                 Ui.FillRound(g, mr, Ui.F(9), Color.FromArgb(241, 242, 245));
-                for (int i = 0; i < 2; i++)
+                float segW = (mw - Ui.F(6)) / mt.Length;
+                for (int i = 0; i < mt.Length; i++)
                 {
-                    RectangleF br = new RectangleF(mr.X + Ui.F(3) + i * (mw - Ui.F(6)) / 2,
-                        mr.Y + Ui.F(3), (mw - Ui.F(6)) / 2, mr.Height - Ui.F(6));
-                    if ((int)metric == i) Ui.FillRound(g, br, Ui.F(7), Color.White);
-                    Ui.DrawText(g, mt[i], Ui.F11, (int)metric == i ? Ui.Text : Ui.Text2, br,
+                    RectangleF br = new RectangleF(mr.X + Ui.F(3) + i * segW,
+                        mr.Y + Ui.F(3), segW, mr.Height - Ui.F(6));
+                    bool sel = heatTabs ? (i == 2 ? heatMix : (!heatMix && (int)metric == i))
+                                        : ((int)metric == i);
+                    if (sel) Ui.FillRound(g, br, Ui.F(7), Color.White);
+                    Ui.DrawText(g, mt[i], Ui.F11, sel ? Ui.Text : Ui.Text2, br,
                         StringAlignment.Center, StringAlignment.Center);
                     AddHit(br, "metric:" + i);
                 }
@@ -1009,7 +1046,7 @@ namespace Keytrace
             {
                 Group grp = groups.All[i];
                 RectangleF rr = new RectangleF(x + Ui.F(6), iy, w - Ui.F(12), rowH);
-                if (groupMenuHover == i) Ui.FillRound(g, rr, Ui.F(7), Color.FromArgb(243, 245, 249));
+                if (menuHover == i) Ui.FillRound(g, rr, Ui.F(7), Color.FromArgb(243, 245, 249));
                 bool act = grp.Id == groups.ActiveId;
                 float dy = rr.Y + rowH / 2;
                 using (Pen p = new Pen(act ? Ui.Accent : Color.FromArgb(203, 208, 216), Ui.F(1.4f)))
@@ -1034,17 +1071,56 @@ namespace Keytrace
             iy += Ui.F(8);
 
             RectangleF nr = new RectangleF(x + Ui.F(6), iy, w - Ui.F(12), Ui.F(32));
-            if (groupMenuHover == n) Ui.FillRound(g, nr, Ui.F(7), Color.FromArgb(243, 245, 249));
+            if (menuHover == n) Ui.FillRound(g, nr, Ui.F(7), Color.FromArgb(243, 245, 249));
             Ui.DrawText(g, "＋ 新建分组…", Ui.FontPx(12, false), Ui.Text,
                 new RectangleF(nr.X + Ui.F(16), nr.Y, nr.Width - Ui.F(28), nr.Height));
             AddMenuHit(nr, "gnew");
             iy += Ui.F(34);
 
             RectangleF mr = new RectangleF(x + Ui.F(6), iy, w - Ui.F(12), Ui.F(32));
-            if (groupMenuHover == n + 1) Ui.FillRound(g, mr, Ui.F(7), Color.FromArgb(243, 245, 249));
+            if (menuHover == n + 1) Ui.FillRound(g, mr, Ui.F(7), Color.FromArgb(243, 245, 249));
             Ui.DrawText(g, "管理分组…", Ui.FontPx(12, false), Ui.Text,
                 new RectangleF(mr.X + Ui.F(16), mr.Y, mr.Width - Ui.F(28), mr.Height));
             AddMenuHit(mr, "gmanage");
+        }
+
+        private void DrawMixMenu(Graphics g)
+        {
+            if (mixMenu == 0) return;
+            RectangleF anchor = mixMenu == 1 ? mixBlueRect : mixRedRect;
+            if (anchor.Width <= 0) return;
+            HeatMetric cur = mixMenu == 1 ? mixBlue : mixRed;
+            string[] names = { "次数", "按住时长", "平均按住" };
+            float w = Math.Max(anchor.Width, Ui.F(150));
+            float rowH = Ui.F(32);
+            float h = Ui.F(6) + names.Length * rowH + Ui.F(6);
+            float x = anchor.X;
+            float y = anchor.Bottom - scroll + Ui.F(4);
+            if (x + w > ClientSize.Width - Ui.F(8)) x = ClientSize.Width - Ui.F(8) - w;
+            if (y + h > ClientSize.Height - Ui.F(8)) y = anchor.Y - scroll - h - Ui.F(4);
+            if (y < Ui.F(8)) y = Ui.F(8);
+
+            using (SolidBrush b = new SolidBrush(Color.FromArgb(10, 15, 23, 42)))
+                g.FillPath(b, Ui.RoundPath(new RectangleF(x - Ui.F(2), y + Ui.F(4), w + Ui.F(4), h), Ui.F(12)));
+            RectangleF box = new RectangleF(x, y, w, h);
+            Ui.FillRound(g, box, Ui.F(10), Color.White);
+            Ui.StrokeRound(g, box, Ui.F(10), Color.FromArgb(225, 228, 234), 1);
+
+            for (int i = 0; i < names.Length; i++)
+            {
+                RectangleF rr = new RectangleF(x + Ui.F(5), y + Ui.F(6) + i * rowH, w - Ui.F(10), rowH);
+                if (menuHover == i) Ui.FillRound(g, rr, Ui.F(6), Color.FromArgb(243, 245, 249));
+                bool sel = (int)cur == i;
+                float dy = rr.Y + rowH / 2;
+                using (Pen p = new Pen(sel ? Ui.Accent : Color.FromArgb(203, 208, 216), Ui.F(1.3f)))
+                    g.DrawEllipse(p, rr.X + Ui.F(10), dy - Ui.F(5), Ui.F(10), Ui.F(10));
+                if (sel)
+                    using (SolidBrush b = new SolidBrush(Ui.Accent))
+                        g.FillEllipse(b, rr.X + Ui.F(13), dy - Ui.F(2), Ui.F(4), Ui.F(4));
+                Ui.DrawText(g, names[i], Ui.F12, Ui.Text,
+                    new RectangleF(rr.X + Ui.F(28), rr.Y, rr.Width - Ui.F(38), rowH));
+                AddMenuHit(rr, "mixset:" + mixMenu + ":" + i);
+            }
         }
 
         private void DrawScrollbar(Graphics g)
@@ -1067,7 +1143,7 @@ namespace Keytrace
 
         private void DrawTooltip(Graphics g)
         {
-            if (hoverVk == 0 || groupMenu) return;
+            if (hoverVk == 0 || groupMenu || mixMenu != 0) return;
             if (view != View.Heatmap && view != View.Overview) return;
             KeyStat ks = FindKey(hoverVk);
             if (ks == null) return;
