@@ -684,7 +684,7 @@ namespace Keytrace
                 Ui.F11, Ui.Text2,
                 new RectangleF(c3.X + pad, c3.Y + Ui.F(44), c3.Width - pad * 2, Ui.F(40)),
                 StringAlignment.Near, StringAlignment.Near, true);
-            Ui.DrawText(g, "版本 1.1.0 · 原生 WinForms · 已运行 " + UptimeText(), Ui.F10, Ui.Text3,
+            Ui.DrawText(g, "版本 1.1.1 · 原生 WinForms · 已运行 " + UptimeText(), Ui.F10, Ui.Text3,
                 new RectangleF(c3.X + pad, c3.Y + Ui.F(96), c3.Width - pad * 2, Ui.F(18)));
             DrawButton(g, new RectangleF(c3.X + pad, c3.Y + Ui.F(122), Ui.F(118), Ui.F(34)),
                 "退出记录器", false, "quit");

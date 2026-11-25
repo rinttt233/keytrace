@@ -78,6 +78,7 @@ namespace Keytrace
         private Point mousePos;
         private int sortCol = 1;
         private bool sortDesc = true;
+        private bool wasMinimized;
         private bool groupMenu;
         private bool hoverChip;
         private int menuHover = -1;
@@ -117,7 +118,22 @@ namespace Keytrace
             try { Font = Ui.F13; } catch { }
 
             ApplyGeometry();
-            Resize += delegate { ClampScroll(); Refresh(); };
+            Resize += delegate
+            {
+                bool min = WindowState == FormWindowState.Minimized;
+                if (wasMinimized && !min)
+                {
+                    RefreshData();
+                    RefreshStatus();
+                }
+                else if (min && !wasMinimized)
+                {
+                    recorder.RequestFlush();
+                }
+                wasMinimized = min;
+                ClampScroll();
+                Refresh();
+            };
             Paint += OnPaint;
             MouseMove += OnMouseMove;
             MouseClick += OnMouseClick;
@@ -165,6 +181,10 @@ namespace Keytrace
                     RefreshData();
                     RefreshStatus();
                 }
+                else
+                {
+                    recorder.RequestFlush();
+                }
             };
 
             Deactivate += delegate
@@ -187,6 +207,8 @@ namespace Keytrace
             if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
             Activate();
             BringToFront();
+            RefreshData();
+            RefreshStatus();
             Refresh();
         }
 
@@ -331,6 +353,7 @@ namespace Keytrace
                 e.CloseReason != CloseReason.TaskManagerClosing)
             {
                 e.Cancel = true;
+                recorder.RequestFlush();
                 Hide();
                 return;
             }
@@ -408,6 +431,7 @@ namespace Keytrace
 
         private void RefreshData()
         {
+            try { recorder.FlushPending(); } catch { }
             long since, until;
             GetBounds(out since, out until);
             try { snap = store.Build(since, until); }
